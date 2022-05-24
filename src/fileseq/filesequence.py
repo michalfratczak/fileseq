@@ -923,7 +923,9 @@ class FileSequence(object):
         _not_hidden = lambda f: not f.startswith('.')
         _match_pattern = None
         _filter_padding = None
-        _join = os.path.join
+        # _join = os.path.join
+        def _join(path, *paths):
+            return os.path.join(path, *paths).replace('\\', '/')
 
         seq = None
         dirpath = pattern

@@ -293,7 +293,10 @@ def _getPathSep(path):
     Returns:
         str:
     """
-    return os.sep
+    # return os.sep
+    return '/'
+
+
 
 
 _STR_TYPES = frozenset((futils.text_type, futils.binary_type))
