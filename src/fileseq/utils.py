@@ -40,7 +40,7 @@ def quantize(number, decimal_places, rounding=decimal.ROUND_HALF_EVEN):
 
 def lenRange(start, stop, step=1):
     """
-    Get the length of values for a given range
+    Get the length of values for a given range, exclusive of the stop
 
     Args:
         start (int):
@@ -68,7 +68,7 @@ class xrange2(object):
     for checking the length of the range.
     """
 
-    __slots__ = ['_len', '_islice']
+    __slots__ = ['_len', '_islice', '_start', '_stop', '_step']
 
     def __init__(self, start, stop=None, step=1):
         if stop is None:
@@ -76,6 +76,15 @@ class xrange2(object):
 
         self._len = lenRange(start, stop, step)
         self._islice = islice(count(start, step), self._len)
+        self._start = start
+        self._stop = stop
+        self._step = step
+
+    def __repr__(self):
+        if self._step == 1:
+            return 'range({}, {})'.format(self._start, self._stop)
+        else:
+            return 'range({}, {}, {})'.format(self._start, self._stop, self._step)
 
     def __len__(self):
         return self._len
@@ -86,6 +95,18 @@ class xrange2(object):
     def __iter__(self):
         return self._islice.__iter__()
 
+    @property
+    def start(self):
+        return self._start
+
+    @property
+    def stop(self):
+        return self._stop
+
+    @property
+    def step(self):
+        return self._step
+
 
 # Issue #44
 # On Windows platform, it is possible for xrange to get an
@@ -95,6 +116,43 @@ if os.name == 'nt':
     xrange = range = xrange2
 else:
     xrange = range
+
+
+class _islice(object):
+
+    def __init__(self, gen, start, stop, step=1):
+        self._gen = gen
+        self._start = start
+        self._stop = stop
+        self._step = step
+
+    def __len__(self):
+        return lenRange(self._start, self._stop, self._step)
+
+    def __next__(self):
+        return next(self._gen)
+
+    def __iter__(self):
+        return self._gen.__iter__()
+
+    @property
+    def start(self):
+        return self._start
+
+    @property
+    def stop(self):
+        return self._stop
+
+    @property
+    def step(self):
+        return self._step
+
+
+class _xfrange(_islice):
+
+    def __len__(self):
+        stop = self._stop + (1 if self._start <= self._stop else -1)
+        return lenRange(self._start, stop, self._step)
 
 
 def xfrange(start, stop, step=1, maxSize=-1):
@@ -138,9 +196,94 @@ def xfrange(start, stop, step=1, maxSize=-1):
     # generator expression to get a proper Generator
     if isinstance(start, futils.integer_types):
         offset = step // abs(step)
-        return (f for f in range(start, stop + offset, step))
+        gen = (f for f in range(start, stop + offset, step))
     else:
-        return (start + i * step for i in range(size))
+        gen = (start + i * step for i in range(size))
+
+    return _xfrange(gen, start, stop, step)
+
+
+def batchFrames(start, stop, batch_size):
+    """
+    Returns a generator that yields batches of frames from start to stop, inclusive.
+    Each batch value is a ``range`` generator object, also providing start, stop, and
+    step properties.
+    The last batch frame length may be smaller if the batches cannot be divided evenly.
+
+    start value is allowed to be greater than stop value, to generate decreasing frame
+    values.
+
+    Args:
+        start (int): start frame value
+        stop (int): stop frame value
+        batch_size (int): max size of each batch
+
+    Yields:
+        range(sub_start, sub_stop)
+    """
+    if batch_size <= 0:
+        return
+
+    for i in xfrange(start, stop, batch_size):
+        if start <= stop:
+            sub_stop = min(i - 1 + batch_size, stop)
+        else:
+            sub_stop = max(i + 1 - batch_size, stop)
+        yield xfrange(i, sub_stop)
+
+
+def batchIterable(it, batch_size):
+    """
+    Returns a generator that yields batches of items returned by the given iterable.
+    The last batch frame length may be smaller if the batches cannot be divided evenly.
+
+    Args:
+        it (iterable): An iterable from which to yield batches of values
+        batch_size (int): max size of each batch
+
+    Yields:
+        iterable: a subset of batched items
+    """
+    if batch_size <= 0:
+        return
+
+    # Try to get the length. If it is a generator with no
+    # known length, then we have to use a less efficient
+    # method that builds results by exhausting the generator
+    try:
+        length = len(it)
+    except TypeError:
+        for b in _batchGenerator(it, batch_size):
+            yield b
+        return
+
+    # We can use the known length to yield slices
+    for start in xrange(0, length, batch_size):
+        stop = start + batch_size
+        gen = islice(it, start, stop)
+        yield _islice(gen, start, stop)
+
+
+def _batchGenerator(gen, batch_size):
+    """
+    A batching generator function that handles a generator
+    type, where the length isn't known.
+
+    Args:
+        gen: generator object
+        batch_size (int): max size of each batch
+
+    Yields:
+        iterable: a subset of batched items
+    """
+    batch = []
+    for item in gen:
+        batch.append(item)
+        if len(batch) == batch_size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
 
 
 def normalizeFrame(frame):

@@ -52,7 +52,9 @@ os.chdir(TEST_DIR)
 # For testing compatibility with pickle values from older version of fileseq
 PICKLE_TEST_SEQ = "/path/to/file.1-100x2#.exr"
 OLD_PICKLE_MAP = {
-    '1.10.0': b'\x80\x02cfileseq.filesequence\nFileSequence\nq\x01)\x81q\x02}q\x03(U\x04_extq\x04U\x04.exrU\t_frameSetq\x05cfileseq.frameset\nFrameSet\nq\x06)\x81q\x07U\x071-100x2q\x08\x85bU\x04_dirq\tU\t/path/to/U\x04_padq\nU\x01#U\x05_baseq\x0bU\x05file.U\x06_zfillq\x0cK\x04ub.'
+    '1.10.0': b'\x80\x02cfileseq.filesequence\nFileSequence\nq\x01)\x81q\x02}q\x03(U\x04_extq\x04U\x04.exrU'
+              b'\t_frameSetq\x05cfileseq.frameset\nFrameSet\nq\x06)\x81q\x07U\x071-100x2q\x08\x85bU\x04_dirq'
+              b'\tU\t/path/to/U\x04_padq\nU\x01#U\x05_baseq\x0bU\x05file.U\x06_zfillq\x0cK\x04ub.'
 }
 
 
@@ -112,6 +114,37 @@ class TestUtils(unittest.TestCase):
             self.assertEqual(len(expected), len(actual))
             self.assertEqual(expected, list(actual))
 
+    def testXfrange(self):
+        Case = namedtuple('Case', ['start', 'stop', 'step', 'len'])
+        table = [
+            Case(1, 1, 1, 1),
+            Case(1, 20, -1, 20),
+            Case(1, 20, 1, 20),
+            Case(1, 20, 2, 10),
+            Case(1, 20, 3, 7),
+            Case(1, 21, 1, 21),
+            Case(1, 21, 2, 11),
+            Case(1, 21, 3, 7),
+            Case(20, 1, 1, 20),
+            Case(20, 1, -1, 20),
+            Case(20, 1, -2, 10),
+            Case(20, 1, -3, 7),
+            Case(21, 1, 1, 21),
+            Case(21, 1, -1, 21),
+            Case(21, 1, -2, 11),
+            Case(21, 1, -3, 7)
+        ]
+        for case in table:
+            actual = utils.xfrange(case.start, case.stop, case.step)
+            self.assertIsInstance(actual, utils._xfrange)
+            self.assertEqual(case.start,  actual.start, msg=str(case))
+            self.assertEqual(case.stop,  actual.stop, msg=str(case))
+            if case.start <= case.stop:
+                self.assertEqual(abs(case.step),  actual.step, msg=str(case))
+            else:
+                self.assertEqual(-(abs(case.step)),  actual.step, msg=str(case))
+            self.assertEqual(case.len, len(actual), msg=str(case))
+
     def testAsString(self):
         expect = "my string"
         custom = _CustomPathString(expect)
@@ -122,6 +155,102 @@ class TestUtils(unittest.TestCase):
         self.assertEqual(expect, actual)
         self.assertIsInstance(actual, str)
         self.assertNotIsInstance(actual, _CustomPathString)
+
+    def testBatchFrames(self):
+        Case = namedtuple('Case', ['start', 'stop', 'batch_size', 'expect'])
+        table = [
+            Case(1,  5, -1, []),
+            Case(1,  5,  0, []),
+            Case(1,  5,  1, [[1], [2], [3], [4], [5]]),
+            Case(1,  5,  2, [[1,2], [3,4], [5]]),
+            Case(1,  5,  3, [[1,2,3], [4,5]]),
+            Case(1,  5,  4, [[1,2,3,4], [5]]),
+            Case(1,  5,  5, [[1,2,3,4,5]]),
+            Case(1,  5,  9, [[1,2,3,4,5]]),
+            Case(2, 13,  3, [[2,3,4], [5,6,7], [8,9,10], [11,12,13]]),
+            Case(2, 13,  4, [[2,3,4,5], [6,7,8,9], [10,11,12,13]]),
+
+            Case( 5, 1, 1, [[5], [4], [3], [2], [1]]),
+            Case(13, 2, 2, [[13,12], [11,10], [9,8], [7,6], [5,4], [3,2]]),
+            Case(13, 2, 3, [[13,12,11], [10,9,8], [7,6,5], [4,3,2]]),
+            Case(13, 2, 4, [[13,12,11,10], [9,8,7,6], [5,4,3,2]]),
+            Case(13, 2, 5, [[13,12,11,10,9], [8,7,6,5,4], [3,2]]),
+            Case(13, 2, 6, [[13,12,11,10,9,8], [7,6,5,4,3,2]]),
+            Case(13, 1, 6, [[13,12,11,10,9,8], [7,6,5,4,3,2], [1]]),
+        ]
+
+        for case in table:
+            ret = utils.batchFrames(case.start, case.stop, case.batch_size)
+            batches = [i for i in ret]
+            actual = [list(i) for i in batches]
+            self.assertEqual(case.expect, actual, msg=str(case))
+
+            expect_len = sum(len(i) for i in case.expect)
+            actual_len = sum(len(i) for i in batches)
+            self.assertEqual(expect_len, actual_len, msg=str(case))
+
+            for i, actual_sub in enumerate(batches):
+                expect_sub = case.expect[i]
+                msg = '{!s} sub={!r}'.format(case, expect_sub)
+                self.assertEqual(expect_sub[0], actual_sub.start, msg=msg)
+                self.assertEqual(expect_sub[-1], actual_sub.stop, msg=msg)
+                expect_step = 1 if actual_sub.start <= actual_sub.stop else -1
+                self.assertEqual(expect_step, actual_sub.step, msg=msg)
+                self.assertEqual(len(expect_sub), len(actual_sub), msg=msg)
+
+    def testBatchIterable(self):
+        Case = namedtuple('Case', ['it', 'batches', 'expect'])
+        _range = range  # prevent pylint warning W1638
+        table = [
+            Case(['a', 'b', 'c'],   0, []),
+            Case(['a', 'b', 'c'],  -1, []),
+            Case(['a', 'b', 'c'],   1, [['a'], ['b'], ['c']]),
+            Case(['a', 'b', 'c'],   2, [['a', 'b'], ['c']]),
+            Case(['a', 'b', 'c'],   3, [['a', 'b', 'c']]),
+            Case(['a', 'b', 'c'],   9, [['a', 'b', 'c']]),
+
+            Case('abc',  0, []),
+            Case('abc',  1, [['a'], ['b'], ['c']]),
+            Case('abc',  2, [['a', 'b'], ['c']]),
+            Case('abc',  3, [['a', 'b', 'c']]),
+            Case('abc',  9, [['a', 'b', 'c']]),
+
+            Case(_range(1,5),  0, []),
+            Case(_range(1,5),  1, [[1], [2], [3], [4]]),
+            Case(_range(1,5),  2, [[1,2], [3,4]]),
+            Case(_range(1,5),  3, [[1,2,3], [4]]),
+            Case(_range(1,5),  4, [[1,2,3,4]]),
+            Case(_range(1,5),  5, [[1,2,3,4]]),
+            Case(_range(1,5),  9, [[1,2,3,4]]),
+        ]
+
+        def gen(): return (i for i in 'abc')
+        table += [
+            Case(gen(),  0, []),
+            Case(gen(),  1, [['a'], ['b'], ['c']]),
+            Case(gen(),  2, [['a', 'b'], ['c']]),
+            Case(gen(),  3, [['a', 'b', 'c']]),
+            Case(gen(),  4, [['a', 'b', 'c']]),
+            Case(gen(),  9, [['a', 'b', 'c']]),
+        ]
+
+        def _iter(): return iter([1,2,3,4,5,6,7])
+        table += [
+            Case(_iter(),  0, []),
+            Case(_iter(),  1, [[1], [2], [3], [4], [5], [6], [7]]),
+            Case(_iter(),  2, [[1,2], [3,4], [5,6], [7]]),
+            Case(_iter(),  3, [[1,2,3], [4,5,6], [7]]),
+            Case(_iter(),  4, [[1,2,3,4], [5,6,7]]),
+            Case(_iter(),  5, [[1,2,3,4,5], [6,7]]),
+            Case(_iter(),  6, [[1,2,3,4,5,6], [7]]),
+            Case(_iter(),  7, [[1,2,3,4,5,6,7]]),
+            Case(_iter(),  9, [[1,2,3,4,5,6,7]]),
+        ]
+
+        for case in table:
+            actual = utils.batchIterable(case.it, case.batches)
+            actual = [list(i) for i in actual]
+            self.assertEqual(case.expect, actual, msg=str(case))
 
 
 class TestFrameSet(unittest.TestCase):
@@ -430,6 +559,44 @@ class TestFrameSet(unittest.TestCase):
         _ = text_type(ret)
         val = repr(ret)
 
+    def testBatchesFrames(self):
+        D = Decimal
+        Case = namedtuple('Case', ['input', 'batch', 'expect'])
+        table = [
+            Case("1-3", 0, []),
+            Case("1-3", 1, [[1], [2], [3]]),
+            Case("1-3", 2, [[1,2], [3]]),
+            Case("1-3", 3, [[1,2,3]]),
+            Case("1-3", 9, [[1,2,3]]),
+
+            Case("6-7x0.2", 1, [[D('6.0')], [D('6.2')], [D('6.4')], [D('6.6')], [D('6.8')], [D('7.0')]]),
+            Case("6-7x0.2", 3, [[D('6.0'),D('6.2'),D('6.4')], [D('6.6'),D('6.8'),D('7.0')]]),
+        ]
+
+        for case in table:
+            fs = FrameSet(case.input)
+            actual = [list(i) for i in fs.batches(case.batch, frames=True)]
+            self.assertEqual(case.expect, actual, msg=str(case))
+
+    def testBatches(self):
+        D = Decimal
+        Case = namedtuple('Case', ['input', 'batch', 'expect'])
+        table = [
+            Case("1-3", 0, []),
+            Case("1-3", 1, ['1', '2', '3']),
+            Case("1-3", 2, ['1-2', '3']),
+            Case("1-3", 3, ['1-3']),
+            Case("1-3", 9, ['1-3']),
+
+            Case("6-7x0.2", 1, ['6', '6.2', '6.4', '6.6', '6.8', '7']),
+            Case("6-7x0.2", 3, ['6-6.4x0.2', '6.6-7x0.2']),
+        ]
+
+        for case in table:
+            expect = [FrameSet(i) for i in case.expect]
+            actual = list(FrameSet(case.input).batches(case.batch, frames=False))
+            self.assertListEqual(expect, actual, msg=str(case))
+
 
 class TestBase(unittest.TestCase):
     RX_PATHSEP = re.compile(r'[/\\]')
@@ -570,6 +737,30 @@ class TestFileSequence(TestBase):
         self.assertEquals("/foo/boo.0001.exr", seq[0])
         self.assertEquals("/foo/boo.0001.exr", seq.index(0))
 
+    def testSeqGettersUdim(self):
+        seq = FileSequence("/foo/boo.1-5<UDIM>.exr")
+        self.assertEquals(5, len(seq))
+        self.assertEquals("/foo/", seq.dirname())
+        self.assertEquals("boo.", seq.basename())
+        self.assertEquals("<UDIM>", seq.padding())
+        self.assertEquals(".exr", seq.extension())
+
+        self.assertEquals("/foo/boo.9999.exr", seq.frame(9999))
+        self.assertEquals("/foo/boo.0001.exr", seq[0])
+        self.assertEquals("/foo/boo.0001.exr", seq.index(0))
+
+    def testSeqGettersUdimD(self):
+        seq = FileSequence("/foo/boo.1-5%(UDIM)d.exr")
+        self.assertEquals(5, len(seq))
+        self.assertEquals("/foo/", seq.dirname())
+        self.assertEquals("boo.", seq.basename())
+        self.assertEquals("%(UDIM)d", seq.padding())
+        self.assertEquals(".exr", seq.extension())
+
+        self.assertEquals("/foo/boo.9999.exr", seq.frame(9999))
+        self.assertEquals("/foo/boo.0001.exr", seq[0])
+        self.assertEquals("/foo/boo.0001.exr", seq.index(0))
+
     def testSetDirname(self):
         seq = FileSequence("/foo/bong.1-5@.exr")
         seq.setDirname("/bing/")
@@ -591,6 +782,82 @@ class TestFileSequence(TestBase):
 
         seq.setPadding("%02d")
         self.assertEquals("/foo/bong.01.exr", seq[0])
+
+        expect = "/foo/bong.1-5#.exr"
+        seq = FileSequence(expect)
+        with self.assertRaises(ValueError):
+            seq.setPadding("bad")
+        self.assertEquals(expect, str(seq))
+
+        expect = "/foo/bong.1-5#.10-20@@.exr"
+        seq = FileSequence(expect)
+        with self.assertRaises(ValueError):
+            seq.setFramePadding("bad")
+        self.assertEquals(expect, str(seq))
+
+        expect = "/foo/bong.1-5#.10-20@@.exr"
+        seq = FileSequence(expect)
+        with self.assertRaises(ValueError):
+            seq.setSubframePadding("bad")
+        self.assertEquals(expect, str(seq))
+
+    def testSetPadStyle(self):
+        Case = namedtuple('Case', ['input', 'to_style', 'expected_pad'])
+        H1 = fileseq.PAD_STYLE_HASH1
+        H4 = fileseq.PAD_STYLE_HASH4
+        FS = FileSequence
+
+        table = [
+            Case(FS('foo.1@.exr', H4), H1, '#'),
+            Case(FS('foo.1@@@@.exr', H4), H1, '####'),
+            Case(FS('foo.1#.exr', H4), H1, '####'),
+            Case(FS('foo.1###@.exr', H4), H1, '#############'),
+            Case(FS('foo.1-5x0.25#.####.exr', H4, allow_subframes=True), H1, '####.################'),
+            Case(FS('foo.1-5x0.25###@.#.exr', H4, allow_subframes=True), H1, '#############.####'),
+
+            Case(FS('foo.1@.exr', H1), H4, '@'),
+            Case(FS('foo.1@@@@.exr', H1), H4, '#'),
+            Case(FS('foo.1#.exr', H1), H4, '@'),
+            Case(FS('foo.1####.exr', H1), H4, '#'),
+            Case(FS('foo.1-5x0.25#.####.exr', H1, allow_subframes=True), H4, '@.#'),
+            Case(FS('foo.1-5x0.25####.#.exr', H1, allow_subframes=True), H4, '#.@'),
+        ]
+
+        for case in table:
+            actual = case.input.copy()
+            actual.setPadStyle(case.to_style)
+            self.assertEqual(case.input.zfill(), actual.zfill(), msg=str(case))
+            self.assertEqual(case.input.decimalPlaces(), actual.decimalPlaces(), msg=str(case))
+            self.assertEqual(case.expected_pad, actual.padding(), msg=str(case))
+
+    def testSetPadStyleSetZfill(self):
+        Case = namedtuple('Case', ['input', 'start_zfill', 'to_style', 'expected_zfill'])
+        H1 = fileseq.PAD_STYLE_HASH1
+        H4 = fileseq.PAD_STYLE_HASH4
+        FS = FileSequence
+
+        table = [
+            Case(FS('foo.1@.exr', H4), 1, H1, 1),
+            Case(FS('foo.1@@@@.exr', H4), 4, H1, 4),
+            Case(FS('foo.1#.exr', H4), 4, H1, 1),
+            Case(FS('foo.1####.exr', H4), 16, H1, 4),
+            Case(FS('foo.1-5x0.25#.####.exr', H4, allow_subframes=True), 4, H1, 1),
+            Case(FS('foo.1-5x0.25####.#.exr', H4, allow_subframes=True), 16, H1, 4),
+
+            Case(FS('foo.1@.exr', H1), 1, H4, 1),
+            Case(FS('foo.1@@@@.exr', H1), 4, H4, 4),
+            Case(FS('foo.1#.exr', H1), 1, H4, 4),
+            Case(FS('foo.1####.exr', H1), 4, H4, 16),
+            Case(FS('foo.1-5x0.25#.####.exr', H1, allow_subframes=True), 1, H4, 4),
+            Case(FS('foo.1-5x0.25####.#.exr', H1, allow_subframes=True), 4, H4, 16),
+        ]
+
+        for case in table:
+            self.assertEqual(case.start_zfill, case.input.zfill(), msg=str(case))
+            actual = case.input.copy()
+            actual.setPadStyle(case.to_style, set_zfill=True)
+            self.assertEqual(case.input.padding(), actual.padding(), msg=str(case))
+            self.assertEqual(case.expected_zfill, actual.zfill(), msg=str(case))
 
     def testSetFrameSet(self):
         seq = FileSequence("/cheech/chong.1-5#.exr")
@@ -875,6 +1142,11 @@ class TestFileSequence(TestBase):
         self.assertEquals(len(seq), 5)
         self.assertEquals(seq.padding(), "$F4")
 
+        seq = FileSequence("/path/to/1-5<UDIM>.exr")
+        self.assertEquals(seq.basename(), "")
+        self.assertEquals(len(seq), 5)
+        self.assertEquals(seq.padding(), "<UDIM>")
+
     def testStringSubclasses(self):
         def sep(p):
             return p.replace("/", os.sep)
@@ -1117,6 +1389,39 @@ class TestFileSequence(TestBase):
             # decoding error is expected for this case.
             if os.name != 'nt':
                 raise
+
+    def testBatchesPaths(self):
+        Case = namedtuple('Case', ['input', 'batch', 'expect'])
+        table = [
+            Case("f.1-3@.x", 0, []),
+            Case("f.1-3@.x", 1, [['f.1.x'], ['f.2.x'], ['f.3.x']]),
+            Case("f.1-3@.x", 2, [['f.1.x','f.2.x'], ['f.3.x']]),
+            Case("f.1-3@.x", 3, [['f.1.x','f.2.x','f.3.x']]),
+            Case("f.1-3@.x", 9, [['f.1.x','f.2.x','f.3.x']]),
+        ]
+
+        for case in table:
+            fs = FileSequence(case.input)
+            actual = [list(i) for i in fs.batches(case.batch, paths=True)]
+            self.assertEqual(case.expect, actual, msg=str(case))
+
+    def testBatches(self):
+        Case = namedtuple('Case', ['input', 'batch', 'expect'])
+        table = [
+            Case("f.1-3@.x", 0, []),
+            Case("f.1-3@.x", 1, ['f.1@.x', 'f.2@.x', 'f.3@.x']),
+            Case("f.1-3@.x", 2, ['f.1-2@.x', 'f.3@.x']),
+            Case("f.1-3@.x", 3, ['f.1-3@.x']),
+            Case("f.1-3@.x", 9, ['f.1-3@.x']),
+
+            Case("f.1-3,10-16x2@@.x", 2, ['f.1-2@@.x', 'f.3,10@@.x', 'f.12,14@@.x', 'f.16@@.x']),
+        ]
+
+        for case in table:
+            fs = FileSequence(case.input)
+            expect = [FileSequence(i) for i in case.expect]
+            actual = list(fs.batches(case.batch, paths=False))
+            self.assertEqual(expect, actual, msg=str(case))
 
 
 class TestFindSequencesOnDisk(TestBase):
@@ -1491,6 +1796,74 @@ class TestFindSequenceOnDisk(TestBase):
             actual = str(seq)
             unittest.TestCase.assertEqual(self, expected, actual)
 
+    def testPreservePadding(self):
+        class Case(object):
+            def __init__(self, pat, expected, strict=False):
+                self.pat = pat
+                self.expected = expected
+                self.strict = strict
+            def __repr__(self):
+                return "Case(pat={!r}, expect={!r}, strict={})".format(self.pat, self.expected, self.strict)
+
+        strict_tests = [
+            Case("seq/big.@.ext", "seq/big.1000-1003@.ext", strict=True),
+            Case("seq/big.@@.ext", "seq/big.1000-1003@@.ext", strict=True),
+            Case("seq/big.@@@.ext", "seq/big.1000-1003@@@.ext", strict=True),
+            Case("seq/big.#.ext", "seq/big.999-1003#.ext", strict=True),
+            Case("seq/big.#@.ext", None, strict=True),
+            Case("seq/foo.#.exr", "seq/foo.1-5#.exr", strict=True),
+            Case("seq/foo.@.exr", None, strict=True),
+
+            Case("seq/big.%02d.ext", "seq/big.1000-1003%02d.ext", strict=True),
+            Case("seq/big.%04d.ext", "seq/big.999-1003%04d.ext", strict=True),
+            Case("seq/big.%08d.ext", None, strict=True),
+            Case("seq/foo.%04d.exr", "seq/foo.1-5%04d.exr", strict=True),
+            Case("seq/foo.%02d.exr", None, strict=True),
+
+            Case("seq/big.$F.ext", "seq/big.1000-1003$F.ext", strict=True),
+            Case("seq/big.$F4.ext", "seq/big.999-1003$F4.ext", strict=True),
+            Case("seq/big.$F8.ext", None, strict=True),
+            Case("seq/foo.$F4.exr", "seq/foo.1-5$F4.exr", strict=True),
+            Case("seq/foo.$F.exr", None, strict=True),
+        ]
+
+        nonstrict_tests = [
+            Case("seq/foo.@.exr", "seq/foo.1-5#.exr", strict=False),
+            Case("seq/foo.@@.exr", "seq/foo.1-5#.exr", strict=False),
+            Case("seq/foo.@@@.exr", "seq/foo.1-5#.exr", strict=False),
+            Case("seq/foo.#.exr", "seq/foo.1-5#.exr", strict=False),
+            Case("seq/foo.#@.exr", "seq/foo.1-5#.exr", strict=False),
+            Case("seq/bar#@.exr", "seq/bar1000-1002,1004-1006#.exr", strict=False),
+
+            Case("seq/foo.%04d.exr", "seq/foo.1-5%04d.exr", strict=False),
+            Case("seq/foo.%02d.exr", "seq/foo.1-5#.exr", strict=False),
+            Case("seq/foo.%08d.exr", "seq/foo.1-5#.exr", strict=False),
+            Case("seq/bar%03d.exr", "seq/bar1000-1002,1004-1006%03d.exr", strict=False),
+            Case("seq/bar%04d.exr", "seq/bar1000-1002,1004-1006%04d.exr", strict=False),
+            Case("seq/bar%05d.exr", "seq/bar1000-1002,1004-1006#.exr", strict=False),
+
+            Case("seq/foo.$F4.exr", "seq/foo.1-5$F4.exr", strict=False),
+            Case("seq/foo.$F.exr", "seq/foo.1-5#.exr", strict=False),
+            Case("seq/foo.$F3.exr", "seq/foo.1-5#.exr", strict=False),
+            Case("seq/foo.$F8.exr", "seq/foo.1-5#.exr", strict=False),
+            Case("seq/bar$F.exr", "seq/bar1000-1002,1004-1006$F.exr", strict=False),
+            Case("seq/bar$F3.exr", "seq/bar1000-1002,1004-1006$F3.exr", strict=False),
+            Case("seq/bar$F4.exr", "seq/bar1000-1002,1004-1006$F4.exr", strict=False),
+            Case("seq/bar$F5.exr", "seq/bar1000-1002,1004-1006#.exr", strict=False),
+        ]
+
+        for case in strict_tests + nonstrict_tests:
+            if case.expected is None:
+                with self.assertRaises(FileSeqException, msg=case):
+                    findSequenceOnDisk(case.pat, strictPadding=case.strict, preserve_padding=True)
+                continue
+
+            seq = findSequenceOnDisk(case.pat, strictPadding=case.strict, preserve_padding=True)
+            self.assertTrue(isinstance(seq, FileSequence), msg=case)
+
+            actual = str(seq)
+            self.assertEqual(case.expected, actual, msg=case)
+
 
 class TestPaddingFunctions(TestBase):
     """
@@ -1542,6 +1915,9 @@ class TestPaddingFunctions(TestBase):
         self.assertEqual(getPaddingNum('$F2'), 2)
         self.assertEqual(getPaddingNum('$F3'), 3)
 
+        self.assertEqual(getPaddingNum('<UDIM>'), 4)
+        self.assertEqual(getPaddingNum('%(UDIM)d'), 4)
+
         allPossibleChars = [s for s in string.printable if s not in PAD_MAP]
         for char in allPossibleChars:
             self.assertRaises(ValueError, getPaddingNum, char)
@@ -1587,6 +1963,8 @@ class TestPaddingFunctions(TestBase):
             Case('$F1', '@'),
             Case('$F2', '@@'),
             Case('$F4', '#'),
+            Case('<UDIM>', '#'),
+            Case('%(UDIM)d', '#'),
             Case('', ''),
             Case('foo', 'foo', error=True),
         ]
@@ -1637,15 +2015,27 @@ class TestPaddingFunctions(TestBase):
             self.assertNativeStr(actual)
 
     def testFilterByPaddingNum(self):
+        class Case(object):
+            def __init__(self, paths, pad, expected, has_padded):
+                self.paths = paths
+                self.pad = pad
+                self.expected = expected
+                self.has_padded = has_padded
+            def __repr__(self):
+                return "Case(paths={!r}, pad={}, has_padded={})".format(self.paths, self.pad, self.has_padded)
+
         tests = [
-            (['file.1.ext'], 1, ['file.1.ext']),
-            (['file.1.ext'], 2, []),
+            Case(['file.1.ext'], 1, ['file.1.ext'], has_padded=False),
+            Case(['file.1.ext'], 2, [], has_padded=False),
+            Case(['file.100.ext', 'file.002.ext'], 3, ['file.100.ext', 'file.002.ext'], has_padded=True),
+            Case(['file.100.ext', 'file.002.ext'], 1, ['file.100.ext'], has_padded=False),
         ]
 
         for test in tests:
-            source, pad, expected = test
-            actual = list(FileSequence._filterByPaddingNum(source, pad))
-            self.assertEqual(actual, expected)
+            filter_ctx = FileSequence._FilterByPaddingNum()
+            actual = list(filter_ctx(test.paths, test.pad))
+            self.assertEqual(test.expected, actual)
+            self.assertEqual(test.has_padded, filter_ctx.has_padded_frames)
 
 
 if __name__ == '__main__':
