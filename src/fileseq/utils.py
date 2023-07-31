@@ -7,6 +7,7 @@ from __future__ import absolute_import, division
 from builtins import bytes
 from builtins import next
 from builtins import range
+from builtins import round
 from builtins import object
 import future.utils as futils
 
@@ -35,7 +36,10 @@ def quantize(number, decimal_places, rounding=decimal.ROUND_HALF_EVEN):
         decimal.Decimal:
     """
     quantize_exponent = decimal.Decimal(1).scaleb(-decimal_places)
-    return number.quantize(quantize_exponent, rounding=rounding)
+    nq = number.quantize(quantize_exponent, rounding=rounding)
+    if nq.is_zero():
+        return nq.copy_abs()
+    return nq
 
 
 def lenRange(start, stop, step=1):
@@ -388,7 +392,7 @@ def pad(number, width=0, decimal_places=None):
     Return the zero-padded string of a given number.
 
     Args:
-        number (int, float, or decimal.Decimal): the number to pad
+        number (str, int, float, or decimal.Decimal): the number to pad
         width (int): width for zero padding the integral component
         decimal_places (int): number of decimal places to use in frame range
 
@@ -401,6 +405,10 @@ def pad(number, width=0, decimal_places=None):
     # See _DeriveClipTimeString for formating of templateAssetPath
     # https://github.com/PixarAnimationStudios/USD/blob/release/pxr/usd/usd/clipSetDefinition.cpp
     if decimal_places == 0:
+        try:
+            number = round(number) or 0
+        except TypeError:
+            pass
         return futils.native_str(number).partition(".")[0].zfill(width)
 
     # USD ultimately uses vsnprintf to format floats for templateAssetPath:
